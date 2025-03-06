@@ -151,7 +151,7 @@ class YandexDiskAPI:
             else:
                 response.raise_for_status()
         except requests.exceptions.RequestException as e:
-            logging.error(f"Ошибка при работе с папкой {folder_path} на Яндекс.Диске: {e}")
+            logging.error(f"Ошибка при работе с папкой {folder_path} на Яндекс диске: {e}")
             raise
 
     def upload_photo(self, photo_url, file_name, folder_path):
@@ -176,7 +176,7 @@ class ConfigLoader:
                 raise KeyError("В конфигурационном файле отсутствуют необходимые ключи")
             
             if not config['vk_token'] or not config['ya_token']:
-                raise ValueError("Токены VK или Яндекс.Диска не могут быть пустыми")
+                raise ValueError("Токены VK или Яндекс диска не могут быть пустыми")
             
             return config
         except (FileNotFoundError, yaml.YAMLError, KeyError, ValueError) as e:
@@ -212,68 +212,18 @@ class PhotoProcessor:
         self.vk_api = vk_api
         self.yandex_disk_api = yandex_disk_api
 
-    def process_user(self, user_id):
-        print("\nВыберите источник фотографий:")
-        print("1. Фотографии профиля")
-        print("2. Фотографии со стены")
-        print("3. Фотографии из альбома")
-        
-        while True:
-            source_choice = input("Введите номер источника (1, 2 или 3): ")
-            if source_choice in ['1', '2', '3']:
-                break
-            print("Неверный выбор. Попробуйте еще раз.")
-        
-        if source_choice == '1':
-            album_id = 'profile'
-        elif source_choice == '2':
-            album_id = 'wall'
-        else:
-            albums = self.vk_api.get_albums(user_id)
-            print("\nСписок альбомов:")
-            for i, album in enumerate(albums, start=1):
-                print(f"{i}. {album['title']} (ID: {album['id']})")
-            
-            while True:
-                try:
-                    album_choice = int(input("Введите номер альбома: "))
-                    if 1 <= album_choice <= len(albums):
-                        album_id = albums[album_choice - 1]['id']
-                        break
-                    else:
-                        print("Неверный выбор. Попробуйте еще раз.")
-                except ValueError:
-                    print("Неверный ввод. Пожалуйста, введите число.")
-
+    def process_user(self, user_id, album_id, save_locally, save_all_photos):
         if album_id != 'profile' and album_id != 'wall':
             if not self.vk_api.check_album_access(user_id, album_id):
-                print(f"У вас нет доступа к выбранному альбому. Пожалуйста, выберите другой альбом или источник фотографий.")
-                return
+                return False, "У вас нет доступа к выбранному альбому."
 
-        while True:
-            save_choice = input("Выберите место сохранения (1 - Локально, 2 - Яндекс.Диск): ")
-            if save_choice in ['1', '2']:
-                break
-            print("Неверный выбор. Попробуйте еще раз.")
-        
-        save_locally = save_choice == '1'
-        
-        while True:
-            photo_choice = input("Выберите количество фотографий (1 - Все фото, 2 - Топ-5 по лайкам): ")
-            if photo_choice in ['1', '2']:
-                break
-            print("Неверный выбор. Попробуйте еще раз.")
-        
-        save_all_photos = photo_choice == '1'
-        
         if save_all_photos:
             photos = self.vk_api.get_all_photos(user_id, album_id)
         else:
             photos = self.vk_api.get_photos(user_id, album_id, count=5)
         
         if not photos:
-            print(f"Не удалось получить фотографии из выбранного источника. Возможно, альбом пуст или у вас нет доступа.")
-            return
+            return False, "Не удалось получить фотки из выбранного источника. Возможно, альбом пуст или у вас нет доступа."
 
         if not save_locally:
             try:
@@ -281,13 +231,13 @@ class PhotoProcessor:
                 user_folder = f'{BASE_FOLDER}/{user_id}'
                 self.yandex_disk_api.create_folder(user_folder)
             except Exception as e:
-                logging.error(f"Ошибка при создании папок на Яндекс.Диске: {e}")
-                raise
+                logging.error(f"Ошибка при создании папок на Яндекс диске: {e}")
+                return False, f"Ошибка при создании папок на Яндекс диске: {str(e)}"
         else:
             user_folder = f'local_backup/{user_id}'
         
         saved_photos = []
-        for photo in tqdm(photos, desc="Сохранение фотографий"):
+        for photo in tqdm(photos, desc="Сохранение фоток"):
             largest = PhotoSaver.get_largest_size(photo['sizes'])
             file_name = f"{photo['likes']['count']}_{datetime.fromtimestamp(photo['date']).strftime('%Y-%m-%d')}.jpg"
             
@@ -307,11 +257,13 @@ class PhotoProcessor:
         with open(f'photos_info_{user_id}.json', 'w', encoding='utf-8') as f:
             json.dump(saved_photos, f, ensure_ascii=False, indent=2)
         
-        print(f"Сохранено {len(saved_photos)} фотографий. Информация сохранена в файле photos_info_{user_id}.json")
+        result_message = f"Сохранено {len(saved_photos)} фоток. Информация сохранена в файле photos_info_{user_id}.json\n"
         if save_locally:
-            print(f"Фотографии сохранены локально в папке: {os.path.abspath(user_folder)}")
+            result_message += f"фотки сохранены локально в папке: {os.path.abspath(user_folder)}"
         else:
-            print(f"Фотографии загружены на Яндекс.Диск в папку: {user_folder}")
+            result_message += f"фотки загружены на Яндекс диск в папку: {user_folder}"
+        
+        return True, result_message
 
 class VKPhotoBackup:
     def __init__(self):
@@ -320,15 +272,39 @@ class VKPhotoBackup:
         self.yandex_disk_api = YandexDiskAPI(self.config['ya_token'])
         self.photo_processor = PhotoProcessor(self.vk_api, self.yandex_disk_api)
 
-    def run(self):
-        logging.info("Начало выполнения программы")
+    def get_friends(self):
+        try:
+            return self.vk_api.get_friends()
+        except Exception as e:
+            logging.error(f"Ошибка при получении списка друзей: {e}")
+            raise
+
+    def get_albums(self, user_id):
+        try:
+            return self.vk_api.get_albums(user_id)
+        except Exception as e:
+            logging.error(f"Ошибка при получении списка альбомов: {e}")
+            raise
+
+    def process_photos(self, user_id, album_id, save_locally, save_all_photos):
+        try:
+            return self.photo_processor.process_user(user_id, album_id, save_locally, save_all_photos)
+        except Exception as e:
+            logging.error(f"Ошибка при обработке фоток: {e}")
+            return False, f"Произошла ошибка: {str(e)}"
+
+if __name__ == "__main__":
+    try:
+        logging.info("Поехали")
+        vk_photo_backup = VKPhotoBackup()
         
         try:
-            friends = self.vk_api.get_friends()
-            logging.info("VK токен успешно прошел проверку")
+            friends = vk_photo_backup.get_friends()
+            logging.info("VK токен прошел проверку")
         except Exception as e:
+            print(f"Ошибка при проверке VK токена: {str(e)}")
             logging.error(f"Ошибка при проверке VK токена: {e}")
-            raise
+            exit(1)
 
         while True:
             print("\nСписок ваших друзей:")
@@ -366,16 +342,65 @@ class VKPhotoBackup:
                 continue
             
             if choice != '4':
-                try:
-                    self.photo_processor.process_user(user_id)
-                except Exception as e:
-                    print(f"Произошла ошибка при обработке пользователя: {str(e)}")
-                    logging.error(f"Ошибка при обработке пользователя: {str(e)}", exc_info=True)
+                # Выбор источника фоток
+                print("\nВыберите источник фоток:")
+                print("1. фотки профиля")
+                print("2. фотки со стены")
+                print("3. фотки из альбома")
+                
+                while True:
+                    source_choice = input("Введите номер источника (1, 2 или 3): ")
+                    if source_choice in ['1', '2', '3']:
+                        break
+                    print("Неверный выбор. Попробуйте еще раз.")
+                
+                if source_choice == '1':
+                    album_id = 'profile'
+                elif source_choice == '2':
+                    album_id = 'wall'
+                else:
+                    try:
+                        albums = vk_photo_backup.get_albums(user_id)
+                        print("\nСписок альбомов:")
+                        for i, album in enumerate(albums, start=1):
+                            print(f"{i}. {album['title']} (ID: {album['id']})")
+                        
+                        while True:
+                            try:
+                                album_choice = int(input("Введите номер альбома: "))
+                                if 1 <= album_choice <= len(albums):
+                                    album_id = albums[album_choice - 1]['id']
+                                    break
+                                else:
+                                    print("Неверный выбор. Попробуйте еще раз.")
+                            except ValueError:
+                                print("Неверный ввод. Пожалуйста, введите число.")
+                    except Exception as e:
+                        print(f"Ошибка при получении списка альбомов: {str(e)}")
+                        continue
 
-if __name__ == "__main__":
-    try:
-        vk_photo_backup = VKPhotoBackup()
-        vk_photo_backup.run()
+                # Выбор места сохранения
+                while True:
+                    save_choice = input("Выберите место сохранения (1 - Локально, 2 - Яндекс диск): ")
+                    if save_choice in ['1', '2']:
+                        break
+                    print("Неверный выбор. Попробуйте еще раз.")
+                
+                save_locally = save_choice == '1'
+                
+                # Выбор количества фоток
+                while True:
+                    photo_choice = input("Выберите количество фоток (1 - Все фото, 2 - Топ-5 по лайкам): ")
+                    if photo_choice in ['1', '2']:
+                        break
+                    print("Неверный выбор. Попробуйте еще раз.")
+                
+                save_all_photos = photo_choice == '1'
+                
+                # Обработка фоток
+                success, message = vk_photo_backup.process_photos(user_id, album_id, save_locally, save_all_photos)
+                print(message)
+
     except Exception as e:
         print(f"Произошла ошибка: {str(e)}")
         logging.error(f"Произошла ошибка: {str(e)}", exc_info=True)
